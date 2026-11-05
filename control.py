@@ -1,5 +1,5 @@
-
 import os
+import tkinter as tk
 from tkinter import filedialog
 import customtkinter as ctk
 
@@ -8,7 +8,8 @@ from exporter import export_polygon_to_zip
 
 class ControlPanel(ctk.CTkFrame):
 
-    MIN_POLYGON_POINTS = 4
+    # Match map widget's minimum
+    MIN_POLYGON_POINTS = 3
 
     COLORS = {
         "panel": "#111827",
@@ -367,7 +368,7 @@ class ControlPanel(ctk.CTkFrame):
         )
 
     # =====================================================
-    # INPUT FACTORY
+    # INPUT FACTORY & CLIPBOARD
     # =====================================================
 
     def _input(self, parent, default, width=90):
@@ -390,7 +391,79 @@ class ControlPanel(ctk.CTkFrame):
         )
 
         entry.insert(0, default)
+        
+        self._bind_clipboard(entry)
+        
         return entry
+
+    def _bind_clipboard(self, widget):
+        
+        def copy(event=None):
+            if widget.select_present():
+                widget.clipboard_clear()
+                widget.clipboard_append(widget.selection_get())
+            return "break"
+
+        def paste(event=None):
+            try:
+                text = widget.clipboard_get()
+                if widget.select_present():
+                    widget.delete("sel.first", "sel.last")
+                widget.insert("insert", text)
+            except Exception:
+                pass
+            return "break"
+
+        def cut(event=None):
+            if widget.select_present():
+                widget.clipboard_clear()
+                widget.clipboard_append(widget.selection_get())
+                widget.delete("sel.first", "sel.last")
+            return "break"
+
+        def select_all(event=None):
+            widget.select_range(0, "end")
+            widget.icursor("end")
+            return "break"
+
+        # Keyboard bindings
+        widget.bind("<Control-c>", copy)
+        widget.bind("<Control-v>", paste)
+        widget.bind("<Control-x>", cut)
+        widget.bind("<Control-a>", select_all)
+        
+        widget.bind("<Command-c>", copy)
+        widget.bind("<Command-v>", paste)
+        widget.bind("<Command-x>", cut)
+        widget.bind("<Command-a>", select_all)
+        
+        # Context Menu for Right Click
+        menu = tk.Menu(
+            widget, 
+            tearoff=0, 
+            bg=self.COLORS["surface"], 
+            fg=self.COLORS["text"], 
+            activebackground=self.COLORS["blue"], 
+            activeforeground="#FFFFFF",
+            font=("Segoe UI", 10)
+        )
+        menu.add_command(label="Cut", command=cut)
+        menu.add_command(label="Copy", command=copy)
+        menu.add_command(label="Paste", command=paste)
+        menu.add_separator()
+        menu.add_command(label="Select All", command=select_all)
+        
+        def show_menu(event):
+            # Focus the widget first so selection/cursor works correctly
+            widget.focus()
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+
+        # Bind right click (Button-3 for Win/Linux, Button-2 for Mac)
+        widget.bind("<Button-3>", show_menu)
+        widget.bind("<Button-2>", show_menu)
 
     # =====================================================
     # LOCATION SECTION
@@ -439,7 +512,7 @@ class ControlPanel(ctk.CTkFrame):
 
         self.go_btn = self._create_button(
             row,
-            "⌖ Go",
+            "⌖ اذهب",
             self._go,
             self.COLORS["blue"],
             self.COLORS["blue_hover"],
@@ -470,7 +543,7 @@ class ControlPanel(ctk.CTkFrame):
 
         self.points_label = ctk.CTkLabel(
             row,
-            text="4+ points",
+            text=f"{self.MIN_POLYGON_POINTS}+ points",
             font=ctk.CTkFont(
                 family="Segoe UI",
                 size=11,
@@ -485,7 +558,7 @@ class ControlPanel(ctk.CTkFrame):
 
         self.draw_btn = self._create_button(
             row,
-            "✎ Draw",
+            "✎ ارسم",
             self._toggle_draw,
             self.COLORS["blue"],
             self.COLORS["blue_hover"],
@@ -498,7 +571,7 @@ class ControlPanel(ctk.CTkFrame):
 
         self.clear_btn = self._create_button(
             row,
-            "⌫ Clear",
+            "⌫ مسح",
             self._clear,
             self.COLORS["gray"],
             self.COLORS["gray_hover"],
@@ -514,7 +587,7 @@ class ControlPanel(ctk.CTkFrame):
 
         section = self._create_section(
             parent,
-            "⇩  EXPORT"
+            "⇩ حفظ كاشيب فايل"
         )
 
         row = ctk.CTkFrame(
@@ -529,7 +602,7 @@ class ControlPanel(ctk.CTkFrame):
 
         self.save_btn = self._create_button(
             row,
-            "⇩ Export ZIP",
+            "⇩ حفظ",
             self._save,
             self.COLORS["green"],
             self.COLORS["green_hover"],
@@ -633,7 +706,7 @@ class ControlPanel(ctk.CTkFrame):
             self._show_dialog(
                 "Not Enough Points",
                 (
-                    "A polygon requires at least 4 distinct points.\n"
+                    f"A polygon requires at least {self.MIN_POLYGON_POINTS} distinct points.\n"
                     f"Currently added: "
                     f"{len(self.map_widget.polygon_points)} points."
                 ),
@@ -660,7 +733,7 @@ class ControlPanel(ctk.CTkFrame):
         else:
 
             self.draw_btn.configure(
-                text="✎ Draw",
+                text="✎ رسم",
                 fg_color=self.COLORS["blue"],
                 hover_color=self.COLORS["blue_hover"]
             )
@@ -697,7 +770,6 @@ class ControlPanel(ctk.CTkFrame):
     def _save(self):
 
         if self.map_widget.is_drawing:
-
             self._show_dialog(
                 "Drawing In Progress",
                 "Finish your polygon before exporting it.",
@@ -706,16 +778,14 @@ class ControlPanel(ctk.CTkFrame):
             return
 
         if not self.map_widget._has_valid_polygon_points():
-
             self._show_dialog(
                 "Invalid Polygon",
-                "A valid polygon must contain at least 4 distinct points.",
+                f"A valid polygon must contain at least {self.MIN_POLYGON_POINTS} distinct points.",
                 "warning"
             )
             return
 
         if self.map_widget.current_polygon is None:
-
             self._show_dialog(
                 "No Polygon Found",
                 "Draw a polygon and finish drawing before exporting.",
@@ -735,21 +805,25 @@ class ControlPanel(ctk.CTkFrame):
             return
 
         try:
-
+            # 1. Export the file
             export_polygon_to_zip(
                 self.map_widget.polygon_points,
                 zip_path
             )
 
+            # 2. Silently clear the map and update the button state
+            self.map_widget.clear_map()
+            self._update_draw_btn(False)
+
+            # 3. Show success message
             self._show_dialog(
                 "Export Successful",
-                "Your shapefile has been exported successfully.",
+                "Your shapefile was exported and the map has been cleared for a new drawing.",
                 "success",
                 details=f"Saved to:\n{zip_path}"
             )
 
         except Exception as e:
-
             self._show_dialog(
                 "Export Failed",
                 "Something went wrong while exporting the shapefile.",

@@ -1,4 +1,3 @@
-
 import tkinter as tk
 import math
 
@@ -8,7 +7,8 @@ from PIL import Image, ImageTk
 
 class MapWidget(TkinterMapView):
 
-    MIN_POLYGON_POINTS = 4
+    # 3 is the minimum to close a shape (Triangle)
+    MIN_POLYGON_POINTS = 3
 
     def __init__(
         self,
@@ -35,6 +35,8 @@ class MapWidget(TkinterMapView):
         self.temp_markers = []
         self.temp_paths = []
         self.current_polygon = None
+        self._dragged_idx = None  # Tracks which point is being dragged
+        self.active_idx = None    # Tracks which point is currently clicked/selected
 
         self.canvas.configure(bg="#1a1a1a")
 
@@ -50,6 +52,10 @@ class MapWidget(TkinterMapView):
         self.add_left_click_map_command(
             self._on_map_click
         )
+        
+        # Bind right-click for point deletion (Button-3 for Win/Linux, Button-2 for Mac)
+        self.canvas.bind("<Button-3>", self._on_right_click)
+        self.canvas.bind("<Button-2>", self._on_right_click)
 
     # =====================================================
     # PROGRESSIVE ZOOM
@@ -109,7 +115,6 @@ class MapWidget(TkinterMapView):
 
         layers = []
 
-        # Reuse existing fallback during rapid zoom operations
         if (
             self._zoom_fallback_item is not None
             and self._zoom_fallback_photo is not None
@@ -129,17 +134,12 @@ class MapWidget(TkinterMapView):
 
             return layers
 
-        # Otherwise use currently displayed map tiles
         for column in self.canvas_tile_array:
-
             for tile in column:
-
                 if tile.canvas_object is None:
                     continue
-
                 if tile.image is self.not_loaded_tile_image:
                     continue
-
                 if tile.image is self.empty_tile_image:
                     continue
 
@@ -166,7 +166,6 @@ class MapWidget(TkinterMapView):
     ):
 
         layers = self._get_zoom_source_layers()
-
         if not layers:
             return
 
@@ -187,68 +186,33 @@ class MapWidget(TkinterMapView):
         converted = []
 
         for x, y, photo in layers:
-
             try:
-
-                image = ImageTk.getimage(
-                    photo
-                ).convert("RGB")
-
-                converted.append(
-                    (x, y, image)
-                )
-
+                image = ImageTk.getimage(photo).convert("RGB")
+                converted.append((x, y, image))
             except Exception:
                 continue
 
         if not converted:
             return
 
-        # Determine source image boundaries
-        left = math.floor(
-            min(x for x, y, image in converted)
-        )
-
-        top = math.floor(
-            min(y for x, y, image in converted)
-        )
-
-        right = math.ceil(
-            max(
-                x + image.width
-                for x, y, image in converted
-            )
-        )
-
-        bottom = math.ceil(
-            max(
-                y + image.height
-                for x, y, image in converted
-            )
-        )
+        left = math.floor(min(x for x, y, image in converted))
+        top = math.floor(min(y for x, y, image in converted))
+        right = math.ceil(max(x + image.width for x, y, image in converted))
+        bottom = math.ceil(max(y + image.height for x, y, image in converted))
 
         source = Image.new(
             "RGB",
-            (
-                max(1, right - left),
-                max(1, bottom - top)
-            ),
+            (max(1, right - left), max(1, bottom - top)),
             "#1a1a1a"
         )
 
         for x, y, image in converted:
-
             source.paste(
                 image,
-                (
-                    round(x) - left,
-                    round(y) - top
-                )
+                (round(x) - left, round(y) - top)
             )
 
-        # Scale around the zoom pointer
         inverse_scale = 1.0 / scale
-
         transform = (
             inverse_scale,
             0,
@@ -259,33 +223,19 @@ class MapWidget(TkinterMapView):
             anchor_y * (1 - inverse_scale) - top
         )
 
-        nearest = getattr(
-            getattr(Image, "Resampling", Image),
-            "NEAREST"
-        )
-
-        affine = getattr(
-            getattr(Image, "Transform", Image),
-            "AFFINE"
-        )
+        nearest = getattr(getattr(Image, "Resampling", Image), "NEAREST")
+        affine = getattr(getattr(Image, "Transform", Image), "AFFINE")
 
         snapshot = source.transform(
-            (
-                int(self.width),
-                int(self.height)
-            ),
+            (int(self.width), int(self.height)),
             affine,
             transform,
             resample=nearest,
             fillcolor="#1a1a1a"
         )
 
-        new_photo = ImageTk.PhotoImage(
-            snapshot,
-            master=self.canvas
-        )
+        new_photo = ImageTk.PhotoImage(snapshot, master=self.canvas)
 
-        # Create new fallback before deleting previous one
         new_item = self.canvas.create_image(
             0,
             0,
@@ -298,11 +248,7 @@ class MapWidget(TkinterMapView):
 
         self._zoom_fallback_item = new_item
         self._zoom_fallback_photo = new_photo
-
-        self._zoom_fallback_visual_zoom = max(
-            visual_zoom,
-            target_zoom
-        )
+        self._zoom_fallback_visual_zoom = max(visual_zoom, target_zoom)
 
         if old_item is not None:
             self.canvas.delete(old_item)
@@ -316,11 +262,7 @@ class MapWidget(TkinterMapView):
 
         tiles = [
             tile
-            for column in getattr(
-                self,
-                "canvas_tile_array",
-                []
-            )
+            for column in getattr(self, "canvas_tile_array", [])
             for tile in column
         ]
 
@@ -338,19 +280,14 @@ class MapWidget(TkinterMapView):
     def _clear_zoom_fallback(self):
 
         if self._zoom_fallback_item is not None:
-
-            self.canvas.delete(
-                self._zoom_fallback_item
-            )
+            self.canvas.delete(self._zoom_fallback_item)
 
         self._zoom_fallback_item = None
         self._zoom_fallback_photo = None
         self._zoom_fallback_visual_zoom = None
 
     def update_canvas_tile_images(self):
-
         super().update_canvas_tile_images()
-
         self._maybe_clear_zoom_fallback()
 
     # =====================================================
@@ -360,15 +297,9 @@ class MapWidget(TkinterMapView):
     def go_to_location(self, lat, lng):
 
         self._clear_zoom_fallback()
-
         self.set_position(lat, lng)
         self.set_zoom(15)
-
-        self.set_marker(
-            lat,
-            lng,
-            text=f"{lat:.4f}, {lng:.4f}"
-        )
+        self.set_marker(lat, lng, text=f"{lat:.4f}, {lng:.4f}")
 
     # =====================================================
     # POLYGON VALIDATION
@@ -376,130 +307,226 @@ class MapWidget(TkinterMapView):
 
     def _has_valid_polygon_points(self):
         """
-        Require at least 4 distinct geographic coordinates.
+        Require at least 3 distinct geographic coordinates (Triangle).
         """
-
         unique_points = []
-
         for lat, lng in self.polygon_points:
-
             duplicate = any(
                 abs(lat - existing_lat) < 0.000001
                 and abs(lng - existing_lng) < 0.000001
                 for existing_lat, existing_lng in unique_points
             )
-
             if not duplicate:
                 unique_points.append((lat, lng))
 
         return len(unique_points) >= self.MIN_POLYGON_POINTS
+        
+    def _get_vertex_at(self, event_x, event_y):
+        """
+        Detects if a map coordinate (click) is near an existing vertex.
+        """
+        click_lat, click_lng = self.convert_canvas_coords_to_decimal_coords(event_x, event_y)
+        
+        degrees_per_pixel = 360.0 / (256.0 * (2.0 ** self.zoom))
+        threshold = 15.0 * degrees_per_pixel
+        
+        for i, (lat, lng) in enumerate(self.polygon_points):
+            lat_rad = math.radians(lat)
+            dx = (click_lng - lng) * math.cos(lat_rad)
+            dy = (click_lat - lat)
+            dist = math.hypot(dx, dy)
+            
+            if dist <= threshold:
+                return i
+        return None
 
     # =====================================================
-    # POLYGON DRAWING
+    # INTERACTIVE DRAG & DROP & ACTIVATION
+    # =====================================================
+    
+    def _update_marker_labels(self):
+        """Updates text of markers to show which one is currently active."""
+        for i, marker in enumerate(self.temp_markers):
+            if i == self.active_idx:
+                marker.set_text(f"📍 P{i+1}")
+            else:
+                marker.set_text(f"P{i+1}")
+
+    def mouse_click(self, event):
+        if not self.is_drawing and self.current_polygon:
+            idx = self._get_vertex_at(event.x, event.y)
+            if idx is not None:
+                self._dragged_idx = idx
+                self.active_idx = idx
+                self._update_marker_labels()
+                return # Skip super() call to freeze map panning
+            else:
+                # Clicked empty space, clear active point
+                self.active_idx = None
+                self._update_marker_labels()
+                
+        super().mouse_click(event)
+
+    def mouse_move(self, event):
+        if getattr(self, '_dragged_idx', None) is not None:
+            lat, lng = self.convert_canvas_coords_to_decimal_coords(event.x, event.y)
+            self.polygon_points[self._dragged_idx] = (lat, lng)
+            
+            if self.current_polygon:
+                try:
+                    self.current_polygon.position_list = self.polygon_points
+                    self.current_polygon.draw()
+                except AttributeError:
+                    self._redraw_polygon()
+                    
+            if len(self.temp_markers) > self._dragged_idx:
+                self.temp_markers[self._dragged_idx].set_position(lat, lng)
+            return
+            
+        super().mouse_move(event)
+
+    def mouse_release(self, event):
+        if getattr(self, '_dragged_idx', None) is not None:
+            self._dragged_idx = None
+            return
+            
+        super().mouse_release(event)
+        
+    def _on_right_click(self, event):
+        if not self.is_drawing and self.current_polygon:
+            idx = self._get_vertex_at(event.x, event.y)
+            if idx is not None:
+                # Select the point
+                self.active_idx = idx
+                self._update_marker_labels()
+                
+                # Show custom simple menu instead of messagebox
+                menu = tk.Menu(
+                    self, 
+                    tearoff=0, 
+                    bg="#1F2937", 
+                    fg="#F9FAFB", 
+                    activebackground="#DC2626", 
+                    font=("Segoe UI", 10)
+                )
+                menu.add_command(label="🗑 Delete Point", command=lambda: self._delete_point(idx))
+                
+                try:
+                    menu.tk_popup(event.x_root, event.y_root)
+                finally:
+                    menu.grab_release()
+        
+        # 'break' stops the event from triggering default OS/Tkinter copy/paste menus
+        return "break"
+        
+    def _delete_point(self, idx):
+        self.polygon_points.pop(idx)
+        self.active_idx = None
+        
+        if len(self.polygon_points) >= self.MIN_POLYGON_POINTS:
+            # Continue functioning as a closed polygon
+            self._redraw_polygon()
+        else:
+            # Reverts safely to an open drawing path if points fall below 3
+            if self.current_polygon:
+                self.current_polygon.delete()
+                self.current_polygon = None
+            self._clear_temp_markers()
+            
+            self.is_drawing = True
+            
+            for i, (lat, lng) in enumerate(self.polygon_points):
+                marker = self.set_marker(lat, lng, text=f"P{i+1}")
+                self.temp_markers.append(marker)
+                
+            if len(self.polygon_points) == 2:
+                path = self.set_path(
+                    [self.polygon_points[0], self.polygon_points[1]],
+                    color="#00FF00",
+                    width=2
+                )
+                self.temp_paths.append(path)
+                
+            print("[MAP] Downgraded to line. Back in drawing mode.")
+
+    # =====================================================
+    # POLYGON DRAWING & REDRAWING
     # =====================================================
 
     def toggle_drawing(self):
-
-        # Start drawing
         if not self.is_drawing:
-
             self.is_drawing = True
-
             print("[MAP] Drawing started.")
-
             return True
 
-        # Do not allow finalization with fewer than 4 points
         if not self._has_valid_polygon_points():
-
-            print(
-                "[WARNING] At least 4 distinct points "
-                "are required."
-            )
-
+            print(f"[WARNING] At least {self.MIN_POLYGON_POINTS} distinct points are required.")
             return True
 
-        # Finalize polygon
         if self.finalize_polygon():
-
             self.is_drawing = False
 
         return self.is_drawing
-
-    def finalize_polygon(self):
-
-        # STRICT VALIDATION
-        if not self._has_valid_polygon_points():
-
-            print(
-                "[ERROR] Cannot create polygon: "
-                "at least 4 distinct points are required."
-            )
-
-            return False
-
-        # Remove previous polygon only after validation
+        
+    def _redraw_polygon(self):
         if self.current_polygon:
-
             self.current_polygon.delete()
             self.current_polygon = None
-
-        # Create polygon
+            
         self.current_polygon = self.set_polygon(
             self.polygon_points,
             fill_color="#3182CE",
             outline_color="#63B3ED",
             border_width=2
         )
-
-        # Remove temporary drawing elements
+        
         self._clear_temp_markers()
+        for i, (lat, lng) in enumerate(self.polygon_points):
+            marker = self.set_marker(lat, lng, text="")
+            self.temp_markers.append(marker)
+            
+        self._update_marker_labels()
+
+    def finalize_polygon(self):
+        if not self._has_valid_polygon_points():
+            print(f"[ERROR] Cannot create polygon: at least {self.MIN_POLYGON_POINTS} distinct points required.")
+            return False
+
+        self._redraw_polygon()
         self._clear_temp_paths()
 
-        print(
-            f"[SUCCESS] Polygon created with "
-            f"{len(self.polygon_points)} points."
-        )
-
+        print(f"[SUCCESS] Polygon created with {len(self.polygon_points)} points.")
         return True
 
 
     def _on_map_click(self, coords):
-
         if not self.is_drawing:
             return
 
         lat, lng = coords
 
-        # Prevent consecutive duplicate points
         if self.polygon_points:
-
             last_lat, last_lng = self.polygon_points[-1]
-
             if (
                 abs(lat - last_lat) < 0.000001
                 and abs(lng - last_lng) < 0.000001
             ):
                 return
 
-        # Check if clicking the first point closes the polygon.
-        # IMPORTANT: Only allow closure when 4 distinct points exist.
         if len(self.polygon_points) >= self.MIN_POLYGON_POINTS:
-
             first_lat, first_lng = self.polygon_points[0]
-
-            clicked_first = (
-                abs(lat - first_lat) < 0.0005
-                and abs(lng - first_lng) < 0.0005
-            )
-
-            if clicked_first:
+            
+            degrees_per_pixel = 360.0 / (256.0 * (2.0 ** self.zoom))
+            threshold = 15.0 * degrees_per_pixel
+            
+            lat_rad = math.radians(first_lat)
+            dx = (lng - first_lng) * math.cos(lat_rad)
+            dy = (lat - first_lat)
+            dist = math.hypot(dx, dy)
+            
+            if dist <= threshold:
                 self.toggle_drawing()
                 return
-
-        # Otherwise ALWAYS add the clicked point.
-        # This allows the fourth point to be added even near
-        # the first point when only 3 points exist.
 
         self.polygon_points.append((lat, lng))
 
@@ -508,12 +535,9 @@ class MapWidget(TkinterMapView):
             lng,
             text=f"P{len(self.polygon_points)}"
         )
-
         self.temp_markers.append(marker)
 
-        # Connect to previous point
         if len(self.polygon_points) > 1:
-
             path = self.set_path(
                 [
                     self.polygon_points[-2],
@@ -522,7 +546,6 @@ class MapWidget(TkinterMapView):
                 color="#00FF00",
                 width=2
             )
-
             self.temp_paths.append(path)
 
         print(f"[MAP] Points: {len(self.polygon_points)}")
@@ -533,47 +556,31 @@ class MapWidget(TkinterMapView):
     # =====================================================
 
     def clear_map(self):
-
-        # Remove temporary markers
         self._clear_temp_markers()
-
-        # Remove temporary paths
         self._clear_temp_paths()
 
-        # Remove finalized polygon
         if self.current_polygon:
-
             self.current_polygon.delete()
             self.current_polygon = None
 
-        # Reset drawing data
         self.polygon_points.clear()
-
-        # Reset drawing mode
         self.is_drawing = False
+        self.active_idx = None
 
         print("[MAP] All drawing elements cleared.")
 
     def _clear_temp_markers(self):
-
         for marker in self.temp_markers[:]:
-
             try:
                 marker.delete()
-
             except Exception as exc:
                 print(f"[Marker cleanup] {exc}")
-
         self.temp_markers.clear()
 
     def _clear_temp_paths(self):
-
         for path in self.temp_paths[:]:
-
             try:
                 path.delete()
-
             except Exception as exc:
                 print(f"[Path cleanup] {exc}")
-
         self.temp_paths.clear()
